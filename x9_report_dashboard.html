@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Fully offline: no network at all. Reports come from images under suspicion,
+     so the CSP also guarantees nothing inside them can phone home. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>X9 Scan Dashboard</title>
+<style>
+:root {
+  --surface-0: #f4f4f1; --surface-1: #fcfcfb; --surface-2: #efeee9;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --accent-ink: #ffffff;
+  --sev-critical: #d03b3b; --sev-high: #ec835a; --sev-medium: #fab219;
+  --sev-low: #9a998f; --sev-unknown: #c3c2b7;
+  --ok: #006300;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --sev-low: #77766f; --sev-unknown: #4a4a46; --ok: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #3987e5; --sev-low: #77766f; --sev-unknown: #4a4a46; --ok: #0ca30c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  padding: 12px 20px; background: var(--surface-1); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0 12px 0 0; letter-spacing: .2px; }
+header h1 small { font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+.spacer { flex: 1; }
+button, select, input[type=search] { font: inherit; color: var(--text-primary);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+button:focus-visible, select:focus-visible, input:focus-visible, .tab:focus-visible, tr:focus-visible
+  { outline: 2px solid var(--accent); outline-offset: 1px; }
+nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--surface-1);
+  border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.tab { border: 0; background: none; border-radius: 0; padding: 10px 12px; color: var(--text-secondary);
+  border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab[aria-selected=true] { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+.tab .count { color: var(--text-muted); font-weight: 400; margin-left: 4px; }
+main { padding: 20px; max-width: 1500px; margin: 0 auto; }
+.view[hidden] { display: none; }
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.panel h2 { font-size: 14px; margin: 0 0 12px; }
+.panel h2 .sub { font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+.grid { display: grid; gap: 16px; }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .label { color: var(--text-secondary); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.tile .value { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tile .hint { color: var(--text-muted); font-size: 12px; }
+.tile.alert { border-color: var(--sev-critical); box-shadow: inset 4px 0 0 var(--sev-critical); }
+.dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.sev .ico { font-size: 11px; width: 12px; text-align: center; }
+.banner { padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; border: 1px solid var(--sev-critical);
+  background: color-mix(in srgb, var(--sev-critical) 12%, var(--surface-1)); }
+.banner strong { color: var(--text-primary); }
+.drop { border: 2px dashed var(--axis); border-radius: 12px; padding: 48px 20px; text-align: center; color: var(--text-secondary); }
+.drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.drop h2 { color: var(--text-primary); margin: 0 0 8px; font-size: 18px; }
+.drop code, code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.drop .actions { margin-top: 16px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.expected { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.expected div { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); }
+.expected .st { font-weight: 700; width: 14px; text-align: center; }
+.expected .ok { color: var(--ok); } .expected .miss { color: var(--text-muted); } .expected .err { color: var(--sev-critical); }
+/* chart */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.hbar { display: grid; grid-template-columns: 110px 1fr 56px; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+.hbar .name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar .track { display: flex; gap: 2px; height: 18px; border-left: 1px solid var(--axis); padding-left: 0; }
+.hbar .seg { height: 100%; min-width: 2px; cursor: default; }
+.hbar .seg:last-child { border-radius: 0 4px 4px 0; }
+.hbar .total { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.hbar .seg:hover { filter: brightness(1.08); outline: 2px solid var(--surface-1); }
+.empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+#tooltip { position: fixed; pointer-events: none; z-index: 50; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: 320px; }
+#tooltip[hidden] { display: none; }
+#tooltip .tt-title { font-weight: 650; margin-bottom: 4px; }
+#tooltip .tt-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+#tooltip .tt-row b { font-variant-numeric: tabular-nums; }
+/* tables */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.toolbar input[type=search] { min-width: 260px; flex: 1; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { border-radius: 999px; padding: 4px 10px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+.chip[aria-pressed=false] { opacity: .45; }
+label.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { position: sticky; top: 0; background: var(--surface-2); font-weight: 600; color: var(--text-secondary);
+  font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+th[data-sort]::after { content: " ↕"; color: var(--text-muted); }
+th.asc::after { content: " ↑"; color: var(--text-primary); } th.desc::after { content: " ↓"; color: var(--text-primary); }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+td.mono, .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-muted); }
+.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2);
+  border: 1px solid var(--border); color: var(--text-secondary); margin: 1px 2px 1px 0; white-space: nowrap; }
+.more { margin-top: 10px; display: flex; gap: 10px; align-items: center; color: var(--text-muted); font-size: 12px; }
+/* drawer */
+#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--surface-1);
+  border-left: 1px solid var(--border); box-shadow: -10px 0 30px rgba(0,0,0,.2); z-index: 20;
+  padding: 18px 20px; overflow-y: auto; }
+#drawer[hidden] { display: none; }
+#drawer h3 { margin: 6px 0 12px; font-size: 16px; word-break: break-word; }
+#drawer dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 13px; margin: 0; }
+#drawer dt { color: var(--text-muted); }
+#drawer dd { margin: 0; word-break: break-word; }
+#drawer pre { white-space: pre-wrap; word-break: break-word; background: var(--surface-2); padding: 10px; border-radius: 6px;
+  font-family: var(--mono); font-size: 12px; max-height: 340px; overflow: auto; }
+#drawer .close { float: right; }
+/* json tree */
+.tree { font-family: var(--mono); font-size: 12px; }
+.tree .node { margin-left: 16px; }
+.tree .tg { cursor: pointer; color: var(--text-muted); display: inline-block; width: 14px; user-select: none; }
+.tree .k { color: var(--accent); }
+.tree .s { color: var(--ok); word-break: break-all; }
+.tree .n { color: var(--sev-high); }
+.tree .b { color: var(--text-secondary); }
+details.raw { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--surface-1); }
+details.raw summary { padding: 10px 12px; cursor: pointer; font-weight: 600; }
+details.raw .tree { padding: 0 12px 12px; }
+.err-list { color: var(--sev-critical); font-size: 13px; }
+@media (max-width: 640px) {
+  main { padding: 12px 16px; } header { padding: 10px 16px; }
+  .grid.two { grid-template-columns: 1fr; } .hbar { grid-template-columns: 80px 1fr 44px; }
+  #drawer dl { grid-template-columns: 1fr; }
+}
+@media print { header, nav.tabs, .toolbar, #drawer { display: none !important; } .view[hidden] { display: block; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>X9 Scan Dashboard <small id="subtitle">no reports loaded</small></h1>
+  <span class="spacer"></span>
+  <input type="file" id="fileInput" multiple accept=".json,.txt" hidden>
+  <input type="file" id="dirInput" webkitdirectory hidden>
+  <button class="primary" id="btnFiles">Open reports…</button>
+  <button id="btnDir">Open folder…</button>
+  <button id="btnClear" hidden>Clear</button>
+  <button id="btnTheme" title="Toggle light/dark" aria-label="Toggle light/dark theme">Theme</button>
+</header>
+<nav class="tabs" role="tablist" id="tabs"></nav>
+<main>
+  <section id="view-load" class="view">
+    <div class="drop" id="drop">
+      <h2>Drop the <code>reports/</code> folder or its JSON files here</h2>
+      <p>Everything is parsed locally in this page. Nothing is uploaded, and the page is blocked from making any network request.</p>
+      <p>Expected output of <code>distroless.clamav.trivy.gitleaks.syft.grype.semgrep.X9.Dockerfile</code>:</p>
+      <div class="actions">
+        <button class="primary" id="btnFiles2">Choose files…</button>
+        <button id="btnDir2">Choose folder…</button>
+      </div>
+    </div>
+  </section>
+  <section id="view-overview" class="view" hidden></section>
+  <section id="view-findings" class="view" hidden></section>
+  <section id="view-vulns" class="view" hidden></section>
+  <section id="view-packages" class="view" hidden></section>
+  <section id="view-raw" class="view" hidden></section>
+</main>
+<aside id="drawer" hidden aria-label="Finding details"></aside>
+<div id="tooltip" hidden></div>
+
+<script>
+"use strict";
+/* ============================================================== helpers === */
+// Every string shown here comes from an image that may be hostile (file names,
+// package names, matched secrets...). Never use innerHTML with data: build DOM
+// nodes and assign textContent only.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n || 0).toLocaleString();
+const arr = v => Array.isArray(v) ? v : (v == null ? [] : [v]);
+const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+
+const SEVS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+const SEV_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
+const SEV_ICON = { CRITICAL: "◆", HIGH: "▲", MEDIUM: "●", LOW: "▾", UNKNOWN: "○" };
+const SEV_VAR = { CRITICAL: "--sev-critical", HIGH: "--sev-high", MEDIUM: "--sev-medium", LOW: "--sev-low", UNKNOWN: "--sev-unknown" };
+function normSev(s) {
+  s = String(s || "").toUpperCase();
+  if (s === "ERROR") return "HIGH";
+  if (s === "WARNING" || s === "MODERATE") return "MEDIUM";
+  if (s === "INFO" || s === "NEGLIGIBLE" || s === "NOTE") return "LOW";
+  return SEV_RANK[s] != null ? s : "UNKNOWN";
+}
+const sevBadge = s => h("span", { class: "sev" },
+  h("span", { class: "ico", style: `color:var(${SEV_VAR[s]})`, "aria-hidden": "true" }, SEV_ICON[s]), s);
+const sevDot = s => h("span", { class: "dot", style: `background:var(${SEV_VAR[s]})` });
+
+const TOOLS = ["clamav", "trivy", "gitleaks", "syft", "grype", "semgrep", "x9-layers"];
+const TOOL_LABEL = { clamav: "ClamAV", trivy: "Trivy", gitleaks: "Gitleaks", syft: "Syft", grype: "Grype", semgrep: "Semgrep", "x9-layers": "X9 layers" };
+const CATS = { malware: "Malware", vuln: "Vulnerability", secret: "Secret", misconfig: "Misconfiguration", sast: "Code (SAST)", hidden: "Hidden in layer", coverage: "Scan coverage" };
+
+/* =============================================================== state ==== */
+let S = freshState();
+function freshState() {
+  return { findings: [], packages: [], raw: {}, loaded: {}, errors: [], clam: null, meta: {}, layers: null };
+}
+
+/* ============================================================== parsers === */
+function add(f) {
+  f.severity = normSev(f.severity);
+  f.idx = S.findings.length;
+  S.findings.push(f);
+}
+
+function parseTrivy(j) {
+  S.meta.trivy = { artifact: j.ArtifactName, type: j.ArtifactType, os: j.Metadata?.OS, created: j.CreatedAt, version: j.Trivy?.Version };
+  for (const r of arr(j.Results)) {
+    for (const v of arr(r.Vulnerabilities)) add({
+      tool: "trivy", category: "vuln", severity: v.Severity, id: v.VulnerabilityID,
+      title: v.Title || v.VulnerabilityID, pkg: v.PkgName, version: v.InstalledVersion,
+      fixed: v.FixedVersion || "", status: v.Status, target: v.PkgPath || r.Target,
+      pkgType: r.Type, desc: v.Description, refs: [v.PrimaryURL, ...arr(v.References)].filter(Boolean),
+      cwe: arr(v.CweIDs).join(", "), layer: v.Layer?.DiffID, createdBy: v.Layer?.CreatedBy,
+      cvss: bestCvss(v.CVSS), raw: v,
+    });
+    for (const s of arr(r.Secrets)) add({
+      tool: "trivy", category: "secret", severity: s.Severity, id: s.RuleID,
+      title: s.Title || s.RuleID, target: r.Target, line: s.StartLine, match: s.Match,
+      desc: s.Category, layer: s.Layer?.DiffID, createdBy: s.Layer?.CreatedBy, raw: s,
+    });
+    for (const m of arr(r.Misconfigurations)) {
+      if (m.Status && m.Status !== "FAIL") continue;
+      add({
+        tool: "trivy", category: "misconfig", severity: m.Severity, id: m.AVDID || m.ID,
+        title: m.Title, target: r.Target, line: m.CauseMetadata?.StartLine,
+        desc: [m.Message, m.Resolution && ("Fix: " + m.Resolution)].filter(Boolean).join("\n\n"),
+        refs: arr(m.References).concat(m.PrimaryURL || []), raw: m,
+      });
+    }
+    for (const l of arr(r.Licenses)) add({
+      tool: "trivy", category: "misconfig", severity: l.Severity, id: l.Name, title: "License: " + l.Name,
+      pkg: l.PkgName, target: l.FilePath || r.Target, desc: l.Category, raw: l,
+    });
+  }
+}
+function bestCvss(c) {
+  if (!c) return "";
+  let best = null;
+  for (const v of Object.values(c)) { const s = v.V3Score ?? v.V40Score ?? v.V2Score; if (s != null && (best == null || s > best)) best = s; }
+  return best == null ? "" : best;
+}
+
+function parseGrype(j) {
+  S.meta.grype = { version: j.descriptor?.version, db: j.descriptor?.db?.built || j.descriptor?.db?.status?.built };
+  for (const m of arr(j.matches)) {
+    const v = m.vulnerability || {}, a = m.artifact || {};
+    const related = arr(m.relatedVulnerabilities).map(r => r.id).filter(Boolean);
+    add({
+      tool: "grype", category: "vuln", severity: v.severity, id: v.id,
+      aliases: related, title: v.id, pkg: a.name, version: a.version, pkgType: a.type,
+      fixed: arr(v.fix?.versions).join(", "), status: v.fix?.state,
+      target: arr(a.locations).map(l => l.path).filter(Boolean).join(", "),
+      desc: v.description || m.relatedVulnerabilities?.[0]?.description,
+      refs: [v.dataSource, ...arr(v.urls)].filter(Boolean),
+      cvss: Math.max(...arr(v.cvss).map(c => c.metrics?.baseScore ?? 0), 0) || "", raw: m,
+    });
+  }
+}
+
+function parseGitleaks(j) {
+  for (const s of arr(j)) add({
+    tool: "gitleaks", category: "secret", severity: "HIGH", id: s.RuleID,
+    title: s.Description || s.RuleID, target: s.File, line: s.StartLine,
+    match: s.Match, desc: s.Entropy != null ? "Entropy " + Number(s.Entropy).toFixed(2) : "",
+    tags: arr(s.Tags), raw: s,
+  });
+}
+
+function parseSemgrep(j) {
+  for (const r of arr(j.results)) {
+    const md = r.extra?.metadata || {};
+    add({
+      tool: "semgrep", category: "sast", severity: r.extra?.severity,
+      id: r.check_id, title: (r.check_id || "").split(".").pop(), target: r.path, line: r.start?.line,
+      desc: r.extra?.message, match: r.extra?.lines === "requires login" ? "" : r.extra?.lines,
+      cwe: arr(md.cwe).join(", "), tags: arr(md.owasp).concat(md.confidence ? ["confidence: " + md.confidence] : []),
+      refs: arr(md.references).concat(md.source || []), raw: r,
+    });
+  }
+  S.meta.semgrep = { errors: arr(j.errors).length, scanned: arr(j.paths?.scanned).length, version: j.version };
+}
+
+function parseClam(j) {
+  // New format from clamav_report_to_json.sh: {infected:[...], summary:{...}};
+  // legacy format: flat summary object only.
+  const summary = j.summary || j;
+  S.clam = { summary, infected: arr(j.infected), legacy: !j.summary };
+  for (const i of arr(j.infected)) {
+    const sig = i.signature || "";
+    const skipped = /^Heuristics\.(Limits\.Exceeded|Encrypted|Broken)/.test(sig);
+    add({
+      tool: "clamav", category: skipped ? "coverage" : "malware",
+      severity: skipped ? "MEDIUM" : "CRITICAL", id: sig, title: skipped ? "Not fully scanned: " + sig : sig,
+      target: i.file, desc: skipped ? "ClamAV could not fully inspect this file (size/encryption/corruption). Payloads are often hidden this way; inspect manually." : "Malware signature match.",
+      raw: i,
+    });
+  }
+}
+
+function parseSyft(j) {
+  if (Array.isArray(j.components)) {           // CycloneDX
+    const walk = list => { for (const c of arr(list)) {
+      S.packages.push({ name: c.name, version: c.version || "", type: c.type || "", purl: c.purl || "",
+        licenses: arr(c.licenses).map(l => l.license?.id || l.license?.name || l.expression).filter(Boolean),
+        locations: arr(c.properties).filter(p => /location.*path/.test(p.name)).map(p => p.value),
+        pkgType: arr(c.properties).find(p => p.name === "syft:package:type")?.value || "" });
+      walk(c.components);
+    } };
+    walk(j.components);
+    S.meta.syft = { format: "CycloneDX " + (j.specVersion || ""), tool: arr(j.metadata?.tools?.components || j.metadata?.tools).map(t => t.name + " " + (t.version || "")).join(", ") };
+  } else if (Array.isArray(j.artifacts)) {     // syft native json
+    for (const a of j.artifacts) S.packages.push({ name: a.name, version: a.version || "", type: a.type || "", purl: a.purl || "",
+      licenses: arr(a.licenses).map(l => l.value || l).filter(x => typeof x === "string"), locations: arr(a.locations).map(l => l.path), pkgType: a.type || "" });
+    S.meta.syft = { format: "syft-json", tool: "syft " + (j.descriptor?.version || "") };
+  }
+}
+
+// Bonus: reports of layers.clamav.trivy.gitleaks.X9.Dockerfile
+function parseGhosts(j) {
+  for (const g of arr(j)) add({
+    tool: "x9-layers", category: "hidden", severity: "MEDIUM", id: g.fate,
+    title: "Hidden in layer " + g.added_in_layer + " (" + g.fate + " at layer " + g.at_layer + ")",
+    target: g.path, desc: "This file is not in the final filesystem but is still shipped inside the image. Anyone who can pull the image can extract it.", raw: g,
+  });
+}
+
+function detect(name, j) {
+  const n = name.toLowerCase();
+  if (n.includes("ghost")) return ["x9-layers", parseGhosts];
+  if (n.includes("layers_inventory")) return ["x9-layers", x => { S.layers = x; }];
+  if (n.includes("clam")) return ["clamav", parseClam];
+  if (n.includes("semgrep")) return ["semgrep", parseSemgrep];
+  if (n.includes("gitleaks")) return ["gitleaks", parseGitleaks];
+  if (n.includes("grype")) return ["grype", parseGrype];
+  if (n.includes("syft") || n.includes("sbom")) return ["syft", parseSyft];
+  if (n.includes("trivy")) return ["trivy", parseTrivy];
+  // content sniffing for renamed files
+  if (j && j.SchemaVersion != null && "Results" in j) return ["trivy", parseTrivy];
+  if (j && Array.isArray(j.matches)) return ["grype", parseGrype];
+  if (j && j.bomFormat === "CycloneDX" || j && Array.isArray(j.artifacts)) return ["syft", parseSyft];
+  if (j && Array.isArray(j.results) && "errors" in j) return ["semgrep", parseSemgrep];
+  if (Array.isArray(j) && (j.length === 0 || "RuleID" in j[0])) return ["gitleaks", parseGitleaks];
+  if (j && ("infected" in j || "infected_files" in j || "known_viruses" in j)) return ["clamav", parseClam];
+  return [null, null];
+}
+
+/* ============================================================== loading === */
+async function loadFiles(fileList) {
+  const files = [...fileList].filter(f => /\.json$/i.test(f.name));
+  if (!files.length) { alert("No .json report files found in the selection."); return; }
+  S = freshState();
+  for (const f of files) {
+    let j;
+    try { j = JSON.parse(await f.text()); }
+    catch (e) { S.errors.push(f.name + ": invalid JSON (" + e.message + ")"); continue; }
+    const [tool, fn] = detect(f.name, j);
+    if (!tool) { S.errors.push(f.name + ": unrecognised report format, skipped"); S.raw[f.name] = j; continue; }
+    try { fn(j); S.loaded[tool] = (S.loaded[tool] || []).concat(f.name); S.raw[f.name] = j; }
+    catch (e) { S.errors.push(f.name + ": parse error in " + TOOL_LABEL[tool] + " parser (" + e.message + ")"); }
+  }
+  // link vulns to SBOM packages
+  ui.page = 1; ui.selected = null;
+  render();
+  setView("overview");
+}
+
+/* ================================================================== UI ==== */
+const ui = {
+  view: "load", search: "", tool: "all", category: "all", sevs: new Set(SEVS), fixable: false,
+  sort: { key: "severity", dir: 1 }, page: 1, pageSize: 200,
+  vSearch: "", vSort: { key: "severity", dir: 1 }, vPage: 1,
+  pSearch: "", pSort: { key: "vulns", dir: -1 }, pPage: 1,
+};
+const VIEWS = [["overview", "Overview"], ["findings", "Findings"], ["vulns", "Vulnerabilities"], ["packages", "Packages (SBOM)"], ["raw", "Raw JSON"]];
+
+function renderTabs() {
+  const nav = $("tabs"); nav.replaceChildren();
+  if (!Object.keys(S.raw).length) return;
+  const counts = { findings: S.findings.length, vulns: dedupVulns().length, packages: S.packages.length, raw: Object.keys(S.raw).length };
+  for (const [id, label] of VIEWS) nav.append(h("button", {
+    class: "tab", role: "tab", "aria-selected": ui.view === id ? "true" : "false",
+    onclick: () => setView(id),
+  }, label, counts[id] != null ? h("span", { class: "count" }, fmt(counts[id])) : null));
+}
+function setView(v) {
+  ui.view = v;
+  for (const s of document.querySelectorAll(".view")) s.hidden = s.id !== "view-" + v;
+  renderTabs();
+  if (v === "raw") renderRaw();
+  window.scrollTo(0, 0);
+}
+function render() {
+  const has = Object.keys(S.raw).length > 0;
+  $("btnClear").hidden = !has;
+  const art = S.meta.trivy?.artifact;
+  $("subtitle").textContent = has ? `${Object.keys(S.raw).length} report(s)` + (art ? " · " + art : "") : "no reports loaded";
+  renderOverview(); renderFindings(); renderVulns(); renderPackages();
+  if (ui.view === "raw") renderRaw();
+  renderTabs();
+}
+
+/* ------------------------------------------------------------- tooltip ---- */
+const tip = $("tooltip");
+function showTip(e, title, rows) {
+  tip.replaceChildren(h("div", { class: "tt-title" }, title),
+    ...rows.map(([dot, k, v]) => h("div", { class: "tt-row" }, h("span", { class: "sev" }, dot, k), h("b", null, v))));
+  tip.hidden = false; moveTip(e);
+}
+function moveTip(e) {
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+
+/* ------------------------------------------------------------ overview ---- */
+function countBy(list, key) { const m = {}; for (const x of list) { const k = typeof key === "function" ? key(x) : x[key]; m[k] = (m[k] || 0) + 1; } return m; }
+
+function stackedBars(rows, onClick) {
+  // rows: [{name, counts:{SEV:n}}] - horizontal stacked bars, one shared scale
+  const max = Math.max(1, ...rows.map(r => SEVS.reduce((a, s) => a + (r.counts[s] || 0), 0)));
+  const wrap = h("div");
+  wrap.append(h("div", { class: "legend" }, SEVS.map(s => h("span", null, sevDot(s), s))));
+  if (!rows.length) { wrap.append(h("div", { class: "empty" }, "Nothing to show.")); return wrap; }
+  for (const r of rows) {
+    const total = SEVS.reduce((a, s) => a + (r.counts[s] || 0), 0);
+    const track = h("div", { class: "track", style: `width:${Math.max(total / max * 100, 0.5)}%` });
+    for (const s of SEVS) {
+      const n = r.counts[s] || 0; if (!n) continue;
+      track.append(h("div", {
+        class: "seg", style: `flex:${n} 1 0;background:var(${SEV_VAR[s]})`,
+        onmouseenter: e => showTip(e, r.name, [[sevDot(s), s, fmt(n)], [null, "Total", fmt(total)]]),
+        onmousemove: moveTip, onmouseleave: hideTip,
+        onclick: onClick ? () => onClick(r, s) : null,
+      }));
+    }
+    wrap.append(h("div", { class: "hbar" },
+      h("div", { class: "name", title: r.name }, r.name),
+      h("div", null, track),
+      h("div", { class: "total" }, fmt(total))));
+  }
+  return wrap;
+}
+
+function renderOverview() {
+  const root = $("view-overview"); root.replaceChildren();
+  if (!Object.keys(S.raw).length) return;
+
+  if (S.errors.length) root.append(h("div", { class: "panel" }, h("h2", null, "Load warnings"),
+    h("div", { class: "err-list" }, S.errors.map(e => h("div", null, "⚠ " + e)))));
+
+  const malware = S.findings.filter(f => f.category === "malware");
+  if (malware.length) root.append(h("div", { class: "banner", role: "alert" },
+    h("strong", null, `◆ ClamAV matched ${malware.length} malware signature${malware.length > 1 ? "s" : ""}. `),
+    "Treat the image as compromised until each file is triaged: ",
+    h("button", { onclick: () => { Object.assign(ui, { category: "malware", tool: "all", search: "", sevs: new Set(SEVS), fixable: false, page: 1 }); renderFindings(); setView("findings"); } }, "show malware findings")));
+
+  const real = S.findings.filter(f => f.category !== "coverage");
+  const bySev = countBy(real, "severity");
+  const uniq = dedupVulns();
+  const secrets = S.findings.filter(f => f.category === "secret").length;
+  const tiles = h("div", { class: "tiles" });
+  const tile = (label, value, hint, extra) => h("div", { class: "tile" + (extra?.alert ? " alert" : "") },
+    h("div", { class: "label" }, extra?.dot, label), h("div", { class: "value" }, value), hint ? h("div", { class: "hint" }, hint) : null);
+  tiles.append(
+    tile("Malware", fmt(malware.length), S.clam ? fmt(S.clam.summary.scanned_files) + " files scanned" : "ClamAV report missing", { alert: malware.length > 0 }),
+    tile("Unique vulnerabilities", fmt(uniq.length), fmt(uniq.filter(v => v.fixed).length) + " with a fix available"),
+    tile("Secrets", fmt(secrets), "Trivy + Gitleaks matches", { alert: secrets > 0 }),
+    tile("Code issues", fmt(S.findings.filter(f => f.category === "sast").length), "Semgrep"),
+    tile("Packages", fmt(S.packages.length), "Syft SBOM components"),
+  );
+  root.append(tiles);
+  const sevTiles = h("div", { class: "tiles" });
+  for (const s of SEVS) sevTiles.append(tile(s, fmt(bySev[s] || 0), "all tools, incl. duplicates", { dot: sevDot(s) }));
+  root.append(sevTiles);
+
+  const gotoFindings = patch => { Object.assign(ui, { search: "", fixable: false, page: 1, tool: "all", category: "all", sevs: new Set(SEVS) }, patch); renderFindings(); setView("findings"); };
+
+  const g = h("div", { class: "grid two" });
+  const byTool = TOOLS.filter(t => S.findings.some(f => f.tool === t)).map(t => ({ name: TOOL_LABEL[t], key: t, counts: countBy(S.findings.filter(f => f.tool === t), "severity") }));
+  g.append(h("div", { class: "panel" }, h("h2", null, "Findings by tool", h("span", { class: "sub" }, "click a segment to filter")),
+    stackedBars(byTool, (r, s) => gotoFindings({ tool: r.key, sevs: new Set([s]) }))));
+  const byCat = Object.keys(CATS).filter(c => S.findings.some(f => f.category === c)).map(c => ({ name: CATS[c], key: c, counts: countBy(S.findings.filter(f => f.category === c), "severity") }));
+  g.append(h("div", { class: "panel" }, h("h2", null, "Findings by category", h("span", { class: "sub" }, "click a segment to filter")),
+    stackedBars(byCat, (r, s) => gotoFindings({ category: r.key, sevs: new Set([s]) }))));
+
+  // top vulnerable packages (deduped)
+  const pk = {};
+  for (const v of uniq) { const k = v.pkg + "@" + (v.version || "?"); (pk[k] = pk[k] || { name: k, counts: {}, n: 0 }); pk[k].counts[v.severity] = (pk[k].counts[v.severity] || 0) + 1; pk[k].n++; }
+  const topPk = Object.values(pk).sort((a, b) => sevScore(b.counts) - sevScore(a.counts)).slice(0, 10);
+  g.append(h("div", { class: "panel" }, h("h2", null, "Most vulnerable packages", h("span", { class: "sub" }, "unique CVEs, top 10")),
+    stackedBars(topPk, r => { ui.vSearch = r.name.split("@")[0]; ui.vPage = 1; renderVulns(); setView("vulns"); })));
+
+  // tool coverage / agreement
+  const both = uniq.filter(v => v.tools.has("trivy") && v.tools.has("grype")).length;
+  const onlyT = uniq.filter(v => v.tools.size === 1 && v.tools.has("trivy")).length;
+  const onlyG = uniq.filter(v => v.tools.size === 1 && v.tools.has("grype")).length;
+  const cov = h("div", { class: "panel" }, h("h2", null, "Report coverage"));
+  const exp = h("div", { class: "expected" });
+  for (const t of ["clamav", "trivy", "gitleaks", "syft", "grype", "semgrep"]) {
+    const ok = S.loaded[t];
+    exp.append(h("div", { title: ok ? ok.join(", ") : "not loaded" },
+      h("span", { class: "st " + (ok ? "ok" : "miss") }, ok ? "✓" : "–"), TOOL_LABEL[t],
+      h("span", { class: "muted" }, ok ? countLabel(t) : "missing")));
+  }
+  cov.append(exp);
+  cov.append(h("p", { class: "muted", style: "margin:12px 0 4px" },
+    `Trivy vs Grype: ${fmt(both)} CVEs found by both, ${fmt(onlyT)} only by Trivy, ${fmt(onlyG)} only by Grype. A CVE found by only one tool needs a closer look: it may be a false positive, or something the other tool's matcher missed.`));
+  if (S.clam) {
+    const sm = S.clam.summary;
+    cov.append(h("p", { class: "muted", style: "margin:4px 0" },
+      `ClamAV: ${sm.known_viruses ? fmt(sm.known_viruses) + " signatures, " : ""}engine ${sm.engine_version || "?"}, ${sm.scanned_files || "?"} files, ${sm.data_scanned || "?"} scanned in ${sm.time || "?"}.`,
+      S.clam.legacy ? " (Old report format: this report has the summary only, not the list of infected files. Re-run with the updated clamav_report_to_json.sh.)" : ""));
+    const cvg = S.findings.filter(f => f.category === "coverage").length;
+    if (cvg) cov.append(h("p", { style: "margin:4px 0" }, sevBadge("MEDIUM"), ` ${cvg} file(s) were too big, encrypted or broken to scan fully. `,
+      h("button", { onclick: () => gotoFindings({ category: "coverage" }) }, "show")));
+  }
+  if (S.meta.semgrep?.errors) cov.append(h("p", { class: "muted", style: "margin:4px 0" }, `Semgrep reported ${S.meta.semgrep.errors} scan error(s). See its raw JSON.`));
+  if (S.layers) cov.append(h("p", { class: "muted", style: "margin:4px 0" }, `Layer inventory: ${S.layers.length} layers.`));
+  g.append(cov);
+  root.append(g);
+}
+function sevScore(c) { return (c.CRITICAL || 0) * 1e6 + (c.HIGH || 0) * 1e4 + (c.MEDIUM || 0) * 100 + (c.LOW || 0); }
+function countLabel(t) {
+  if (t === "syft") return fmt(S.packages.length) + " pkgs";
+  if (t === "clamav") return S.clam ? fmt(S.clam.infected.length) + " hits" : "";
+  return fmt(S.findings.filter(f => f.tool === t).length) + " findings";
+}
+
+/* ------------------------------------------------------------- findings --- */
+function filteredFindings() {
+  const q = ui.search.trim().toLowerCase();
+  return S.findings.filter(f =>
+    (ui.tool === "all" || f.tool === ui.tool) &&
+    (ui.category === "all" || f.category === ui.category) &&
+    ui.sevs.has(f.severity) &&
+    (!ui.fixable || f.fixed) &&
+    (!q || [f.id, f.title, f.pkg, f.version, f.target, f.desc, f.cwe, f.match, ...(f.aliases || [])].some(x => x && String(x).toLowerCase().includes(q))));
+}
+// within one severity: malware and secrets first - they need action regardless of CVSS
+const CAT_RANK = { malware: 0, secret: 1, hidden: 2, sast: 3, misconfig: 4, vuln: 5, coverage: 6 };
+const SORTERS = {
+  severity: (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || CAT_RANK[a.category] - CAT_RANK[b.category] || (Number(b.cvss) || 0) - (Number(a.cvss) || 0),
+  tool: (a, b) => a.tool.localeCompare(b.tool),
+  category: (a, b) => a.category.localeCompare(b.category),
+  id: (a, b) => String(a.id || "").localeCompare(String(b.id || "")),
+  where: (a, b) => String(a.pkg || a.target || "").localeCompare(String(b.pkg || b.target || "")),
+  fixed: (a, b) => String(b.fixed || "").localeCompare(String(a.fixed || "")),
+};
+function sortHeader(label, key, state, rerender) {
+  const cls = state.key === key ? (state.dir > 0 ? "asc" : "desc") : "";
+  return h("th", { "data-sort": key, class: cls, scope: "col", onclick: () => {
+    if (state.key === key) state.dir *= -1; else { state.key = key; state.dir = 1; }
+    rerender();
+  } }, label);
+}
+function renderFindings() {
+  const root = $("view-findings"); root.replaceChildren();
+  if (!S.findings.length) { root.append(h("div", { class: "panel empty" }, "No findings parsed.")); return; }
+  const list = filteredFindings();
+  const sorter = SORTERS[ui.sort.key];
+  list.sort((a, b) => ui.sort.dir * sorter(a, b) || SORTERS.severity(a, b));
+
+  const toolSel = h("select", { "aria-label": "Tool", onchange: e => { ui.tool = e.target.value; ui.page = 1; renderFindings(); } },
+    h("option", { value: "all" }, "All tools"),
+    TOOLS.filter(t => S.findings.some(f => f.tool === t)).map(t => h("option", { value: t, selected: ui.tool === t }, TOOL_LABEL[t])));
+  const catSel = h("select", { "aria-label": "Category", onchange: e => { ui.category = e.target.value; ui.page = 1; renderFindings(); } },
+    h("option", { value: "all" }, "All categories"),
+    Object.keys(CATS).filter(c => S.findings.some(f => f.category === c)).map(c => h("option", { value: c, selected: ui.category === c }, CATS[c])));
+  const search = h("input", { type: "search", placeholder: "Search ID, package, path, CWE, description…", value: ui.search, "aria-label": "Search findings" });
+  let t; search.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { ui.search = search.value; ui.page = 1; renderFindings(); $("view-findings").querySelector("input[type=search]").focus(); }, 200); });
+  const chips = h("div", { class: "chips", role: "group", "aria-label": "Severity filter" }, SEVS.map(s => h("button", {
+    class: "chip", "aria-pressed": ui.sevs.has(s) ? "true" : "false",
+    onclick: () => { ui.sevs.has(s) ? ui.sevs.delete(s) : ui.sevs.add(s); ui.page = 1; renderFindings(); },
+  }, sevDot(s), s)));
+  const fix = h("label", { class: "check" }, h("input", { type: "checkbox", checked: ui.fixable, onchange: e => { ui.fixable = e.target.checked; ui.page = 1; renderFindings(); } }), "Fix available only");
+
+  root.append(h("div", { class: "panel" },
+    h("div", { class: "toolbar" }, search, toolSel, catSel, chips, fix,
+      h("button", { onclick: () => exportCsv(list) }, "Export CSV"),
+      h("button", { onclick: () => { Object.assign(ui, { search: "", tool: "all", category: "all", sevs: new Set(SEVS), fixable: false, page: 1 }); renderFindings(); } }, "Reset")),
+    h("div", { class: "muted", style: "margin-bottom:8px;font-size:12px" }, `${fmt(list.length)} of ${fmt(S.findings.length)} findings`),
+    findingsTable(list)));
+}
+function findingsTable(list) {
+  const shown = list.slice(0, ui.page * ui.pageSize);
+  const rerender = () => renderFindings();
+  const tbody = h("tbody");
+  for (const f of shown) tbody.append(h("tr", { tabindex: "0", onclick: () => openDrawer(f), onkeydown: e => { if (e.key === "Enter") openDrawer(f); } },
+    h("td", null, sevBadge(f.severity), f.cvss ? h("div", { class: "muted", style: "font-size:11px" }, "CVSS " + f.cvss) : null),
+    h("td", null, TOOL_LABEL[f.tool]),
+    h("td", null, CATS[f.category]),
+    h("td", { class: "mono" }, trunc(f.id, 80), f.title && f.title !== f.id ? h("div", { class: "muted", style: "font-family:inherit" }, trunc(f.title, 120)) : null),
+    h("td", { class: "mono" }, f.pkg ? [h("b", null, f.pkg), f.version ? " " + f.version : "", h("br"), h("span", { class: "muted" }, trunc(f.target, 120))] : [trunc(f.target, 160), f.line ? h("span", { class: "muted" }, ":" + f.line) : ""]),
+    h("td", { class: "mono" }, f.fixed || h("span", { class: "muted" }, f.category === "vuln" ? (f.status || "none") : "")),
+  ));
+  const table = h("div", { class: "table-wrap" }, h("table", null,
+    h("thead", null, h("tr", null,
+      sortHeader("Severity", "severity", ui.sort, rerender), sortHeader("Tool", "tool", ui.sort, rerender),
+      sortHeader("Category", "category", ui.sort, rerender), sortHeader("ID / rule", "id", ui.sort, rerender),
+      sortHeader("Package / location", "where", ui.sort, rerender), sortHeader("Fixed in", "fixed", ui.sort, rerender))),
+    tbody));
+  const wrap = h("div", null, table);
+  if (shown.length < list.length) wrap.append(h("div", { class: "more" },
+    `Showing ${fmt(shown.length)} of ${fmt(list.length)}`,
+    h("button", { onclick: () => { ui.page++; renderFindings(); } }, "Show more"),
+    h("button", { onclick: () => { ui.page = Math.ceil(list.length / ui.pageSize); renderFindings(); } }, "Show all")));
+  return wrap;
+}
+
+/* ------------------------------------------------------------- drawer ----- */
+function openDrawer(f) {
+  const d = $("drawer"); d.replaceChildren();
+  const row = (k, v) => v == null || v === "" || (Array.isArray(v) && !v.length) ? null : [h("dt", null, k), h("dd", null, v)];
+  const others = f.category === "vuln" ? S.findings.filter(x => x !== f && x.category === "vuln" && vulnKey(x) === vulnKey(f) && x.pkg === f.pkg) : [];
+  d.append(h("div", null,
+    h("button", { class: "close", onclick: closeDrawer, "aria-label": "Close" }, "✕"),
+    h("div", null, sevBadge(f.severity), " ", h("span", { class: "tag" }, TOOL_LABEL[f.tool]), h("span", { class: "tag" }, CATS[f.category])),
+    h("h3", null, f.title || f.id),
+    h("dl", null,
+      row("ID / rule", h("span", { class: "mono" }, f.id)),
+      row("Aliases", (f.aliases || []).join(", ")),
+      row("CVSS", f.cvss),
+      row("Package", f.pkg ? h("span", { class: "mono" }, f.pkg + (f.version ? " " + f.version : "")) : null),
+      row("Package type", f.pkgType),
+      row("Fixed in", f.fixed ? h("span", { class: "mono" }, f.fixed) : null),
+      row("Fix status", f.status),
+      row("Location", f.target ? h("span", { class: "mono" }, f.target + (f.line ? ":" + f.line : "")) : null),
+      row("CWE", f.cwe),
+      row("Tags", (f.tags || []).length ? f.tags.map(t => h("span", { class: "tag" }, t)) : null),
+      row("Layer", f.layer ? h("span", { class: "mono" }, f.layer) : null),
+      row("Layer created by", f.createdBy ? h("span", { class: "mono" }, f.createdBy) : null),
+      row("Also reported by", others.length ? [...new Set(others.map(o => TOOL_LABEL[o.tool]))].join(", ") : null),
+    ),
+    f.match ? [h("h4", null, "Match (as reported, may be redacted)"), h("pre", null, f.match)] : null,
+    f.desc ? [h("h4", null, "Description"), h("pre", null, f.desc)] : null,
+    (f.refs || []).length ? [h("h4", null, "References"), h("div", null, [...new Set(f.refs)].slice(0, 15).map(r =>
+      h("div", { class: "mono" }, h("span", { title: "Links are shown as text and not opened, because the page is fully offline. Copy the address to visit it." }, r))))] : null,
+    h("details", null, h("summary", null, "Raw record"), h("pre", null, JSON.stringify(f.raw, null, 2))),
+  ));
+  d.hidden = false;
+  d.querySelector(".close").focus();
+}
+function closeDrawer() { $("drawer").hidden = true; }
+
+/* ----------------------------------------------------------- vulns -------- */
+function vulnKey(f) {
+  // prefer the CVE id so Trivy (CVE-…) and Grype (GHSA-… with related CVE) line up
+  const ids = [f.id, ...(f.aliases || [])].filter(Boolean);
+  return ids.find(i => /^CVE-/i.test(i)) || f.id;
+}
+let _dedup = null, _dedupFor = null;
+function dedupVulns() {
+  if (_dedupFor === S) return _dedup;
+  const m = new Map();
+  for (const f of S.findings) {
+    if (f.category !== "vuln") continue;
+    const key = vulnKey(f) + "|" + f.pkg + "|" + (f.version || "");
+    let v = m.get(key);
+    if (!v) { v = { key, id: vulnKey(f), pkg: f.pkg, version: f.version, severity: f.severity, fixed: f.fixed, cvss: f.cvss, title: f.title, tools: new Set(), items: [] }; m.set(key, v); }
+    v.tools.add(f.tool); v.items.push(f);
+    if (SEV_RANK[f.severity] < SEV_RANK[v.severity]) v.severity = f.severity;
+    if (!v.fixed && f.fixed) v.fixed = f.fixed;
+    if ((Number(f.cvss) || 0) > (Number(v.cvss) || 0)) v.cvss = f.cvss;
+    if (f.tool === "trivy" && f.title) v.title = f.title;
+  }
+  _dedup = [...m.values()]; _dedupFor = S;
+  return _dedup;
+}
+function renderVulns() {
+  const root = $("view-vulns"); root.replaceChildren();
+  const all = dedupVulns();
+  if (!all.length) { root.append(h("div", { class: "panel empty" }, "No vulnerability reports (Trivy or Grype) loaded.")); return; }
+  const q = ui.vSearch.trim().toLowerCase();
+  const list = all.filter(v => !q || [v.id, v.pkg, v.version, v.title, ...v.items.map(i => i.id)].some(x => x && String(x).toLowerCase().includes(q)));
+  const S2 = {
+    severity: (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || (Number(b.cvss) || 0) - (Number(a.cvss) || 0),
+    id: (a, b) => a.id.localeCompare(b.id), pkg: (a, b) => String(a.pkg).localeCompare(String(b.pkg)),
+    tools: (a, b) => b.tools.size - a.tools.size, fixed: (a, b) => String(b.fixed || "").localeCompare(String(a.fixed || "")),
+  };
+  list.sort((a, b) => ui.vSort.dir * S2[ui.vSort.key](a, b) || S2.severity(a, b));
+  const shown = list.slice(0, ui.vPage * ui.pageSize);
+  const search = h("input", { type: "search", placeholder: "Search CVE, package…", value: ui.vSearch, "aria-label": "Search vulnerabilities" });
+  let t; search.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { ui.vSearch = search.value; ui.vPage = 1; renderVulns(); $("view-vulns").querySelector("input[type=search]").focus(); }, 200); });
+  const rr = () => renderVulns();
+  const tbody = h("tbody");
+  for (const v of shown) tbody.append(h("tr", { tabindex: "0", onclick: () => openDrawer(v.items.find(i => i.tool === "trivy") || v.items[0]) },
+    h("td", null, sevBadge(v.severity)),
+    h("td", { class: "mono" }, v.id, h("div", { class: "muted", style: "font-family:inherit" }, trunc(v.title !== v.id ? v.title : "", 110))),
+    h("td", { class: "mono" }, h("b", null, v.pkg), " ", v.version || ""),
+    h("td", { class: "mono" }, v.fixed || h("span", { class: "muted" }, "none")),
+    h("td", { class: "num" }, v.cvss || ""),
+    h("td", null, [...v.tools].map(x => h("span", { class: "tag" }, TOOL_LABEL[x])))));
+  root.append(h("div", { class: "panel" },
+    h("h2", null, "Unique vulnerabilities", h("span", { class: "sub" }, "Trivy and Grype merged by CVE + package + version")),
+    h("div", { class: "toolbar" }, search, h("button", { onclick: () => exportCsv(list.flatMap(v => v.items)) }, "Export CSV")),
+    h("div", { class: "muted", style: "margin-bottom:8px;font-size:12px" }, `${fmt(list.length)} of ${fmt(all.length)}`),
+    h("div", { class: "table-wrap" }, h("table", null, h("thead", null, h("tr", null,
+      sortHeader("Severity", "severity", ui.vSort, rr), sortHeader("Vulnerability", "id", ui.vSort, rr),
+      sortHeader("Package", "pkg", ui.vSort, rr), sortHeader("Fixed in", "fixed", ui.vSort, rr),
+      h("th", null, "CVSS"), sortHeader("Found by", "tools", ui.vSort, rr))), tbody)),
+    shown.length < list.length ? h("div", { class: "more" }, `Showing ${fmt(shown.length)} of ${fmt(list.length)}`,
+      h("button", { onclick: () => { ui.vPage++; renderVulns(); } }, "Show more")) : null));
+}
+
+/* --------------------------------------------------------- packages ------- */
+function renderPackages() {
+  const root = $("view-packages"); root.replaceChildren();
+  if (!S.packages.length) { root.append(h("div", { class: "panel empty" }, "No Syft SBOM loaded.")); return; }
+  const vulnBy = {};
+  for (const v of dedupVulns()) { const k = v.pkg + "@" + v.version; (vulnBy[k] = vulnBy[k] || { n: 0, worst: "UNKNOWN" }); vulnBy[k].n++; if (SEV_RANK[v.severity] < SEV_RANK[vulnBy[k].worst]) vulnBy[k].worst = v.severity; }
+  const rows = S.packages.map(p => ({ ...p, v: vulnBy[p.name + "@" + p.version] || { n: 0, worst: null } }));
+  const q = ui.pSearch.trim().toLowerCase();
+  const list = rows.filter(p => !q || [p.name, p.version, p.purl, p.pkgType, ...p.licenses, ...p.locations].some(x => x && String(x).toLowerCase().includes(q)));
+  const S3 = { name: (a, b) => a.name.localeCompare(b.name), type: (a, b) => String(a.pkgType).localeCompare(String(b.pkgType)),
+    vulns: (a, b) => a.v.n - b.v.n || (SEV_RANK[b.v.worst] ?? 9) - (SEV_RANK[a.v.worst] ?? 9) };
+  list.sort((a, b) => ui.pSort.dir * S3[ui.pSort.key](a, b) || a.name.localeCompare(b.name));
+  const shown = list.slice(0, ui.pPage * ui.pageSize);
+  const types = countBy(S.packages, p => p.pkgType || p.type || "other");
+  const search = h("input", { type: "search", placeholder: "Search name, purl, license, path…", value: ui.pSearch, "aria-label": "Search packages" });
+  let t; search.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { ui.pSearch = search.value; ui.pPage = 1; renderPackages(); $("view-packages").querySelector("input[type=search]").focus(); }, 200); });
+  const rr = () => renderPackages();
+  const tbody = h("tbody");
+  for (const p of shown) tbody.append(h("tr", { tabindex: "0", onclick: () => { if (p.v.n) { ui.vSearch = p.name; ui.vPage = 1; renderVulns(); setView("vulns"); } } },
+    h("td", { class: "mono" }, h("b", null, p.name), " ", p.version, p.purl ? h("div", { class: "muted" }, trunc(p.purl, 140)) : null),
+    h("td", null, p.pkgType || p.type),
+    h("td", null, p.licenses.slice(0, 4).map(l => h("span", { class: "tag" }, trunc(l, 40)))),
+    h("td", { class: "mono muted" }, trunc(p.locations.join(", "), 140)),
+    h("td", null, p.v.n ? h("span", { class: "sev" }, sevBadge(p.v.worst), " ×" + p.v.n) : h("span", { class: "muted" }, "–"))));
+  root.append(h("div", { class: "panel" },
+    h("h2", null, "SBOM components", h("span", { class: "sub" }, S.meta.syft?.format || "")),
+    h("div", { class: "legend" }, Object.entries(types).sort((a, b) => b[1] - a[1]).map(([k, n]) => h("span", { class: "tag" }, `${k}: ${fmt(n)}`))),
+    h("div", { class: "toolbar" }, search),
+    h("div", { class: "muted", style: "margin-bottom:8px;font-size:12px" }, `${fmt(list.length)} of ${fmt(S.packages.length)} · click a vulnerable package to see its CVEs`),
+    h("div", { class: "table-wrap" }, h("table", null, h("thead", null, h("tr", null,
+      sortHeader("Package", "name", ui.pSort, rr), sortHeader("Type", "type", ui.pSort, rr),
+      h("th", null, "Licenses"), h("th", null, "Location"), sortHeader("Vulns", "vulns", ui.pSort, rr))), tbody)),
+    shown.length < list.length ? h("div", { class: "more" }, `Showing ${fmt(shown.length)} of ${fmt(list.length)}`,
+      h("button", { onclick: () => { ui.pPage++; renderPackages(); } }, "Show more")) : null));
+}
+
+/* ------------------------------------------------------------- raw json --- */
+// Lazy tree: children are only built when expanded, so 100 MB SBOMs stay usable.
+function treeNode(key, value) {
+  const div = h("div", { class: "node" });
+  const isObj = value && typeof value === "object";
+  const keyEl = key != null ? h("span", null, h("span", { class: "k" }, JSON.stringify(String(key))), ": ") : document.createTextNode("");
+  if (!isObj) {
+    const cls = typeof value === "string" ? "s" : typeof value === "number" ? "n" : "b";
+    div.append(h("span", { class: "tg" }), keyEl, h("span", { class: cls }, JSON.stringify(value)));
+    return div;
+  }
+  const keys = Object.keys(value);
+  const tg = h("span", { class: "tg", role: "button", tabindex: "0" }, "▸");
+  const kids = h("div", { hidden: true });
+  let built = false;
+  const toggle = () => {
+    if (!built) { built = true; const lim = 500;
+      for (const k of keys.slice(0, lim)) kids.append(treeNode(Array.isArray(value) ? null : k, value[k]));
+      if (keys.length > lim) kids.append(h("div", { class: "node muted" }, `… ${fmt(keys.length - lim)} more (use Export / jq for the full list)`)); }
+    kids.hidden = !kids.hidden; tg.textContent = kids.hidden ? "▸" : "▾";
+  };
+  tg.addEventListener("click", toggle); tg.addEventListener("keydown", e => { if (e.key === "Enter") toggle(); });
+  div.append(tg, keyEl, h("span", { class: "muted" }, Array.isArray(value) ? `[${fmt(keys.length)}]` : `{${fmt(keys.length)}}`), kids);
+  return div;
+}
+let _rawFor = null;
+function renderRaw() {
+  if (_rawFor === S) return; _rawFor = S;
+  const root = $("view-raw"); root.replaceChildren();
+  for (const [name, j] of Object.entries(S.raw)) {
+    const det = h("details", { class: "raw" }, h("summary", null, name));
+    det.addEventListener("toggle", () => { if (det.open && det.children.length === 1) { const t = h("div", { class: "tree" }, treeNode(null, j)); det.append(t); t.querySelector(".tg").click(); } }, { once: false });
+    root.append(det);
+  }
+}
+
+/* ---------------------------------------------------------------- export -- */
+function exportCsv(list) {
+  const cols = ["tool", "category", "severity", "id", "title", "pkg", "version", "fixed", "target", "line", "cvss", "cwe"];
+  // prefix cells that a spreadsheet would execute as formulas (CSV injection)
+  const cell = v => { let s = v == null ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  const csv = [cols.join(","), ...list.map(f => cols.map(c => cell(f[c])).join(","))].join("\r\n");
+  const a = h("a", { href: URL.createObjectURL(new Blob([csv], { type: "text/csv" })), download: "x9_findings.csv" });
+  document.body.append(a); a.click(); a.remove();
+}
+
+/* ---------------------------------------------------------------- wiring -- */
+const pickFiles = () => $("fileInput").click(), pickDir = () => $("dirInput").click();
+$("btnFiles").onclick = $("btnFiles2").onclick = pickFiles;
+$("btnDir").onclick = $("btnDir2").onclick = pickDir;
+$("fileInput").onchange = e => { loadFiles(e.target.files); e.target.value = ""; };
+$("dirInput").onchange = e => { loadFiles(e.target.files); e.target.value = ""; };
+$("btnClear").onclick = () => { S = freshState(); render(); setView("load"); };
+$("btnTheme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("x9-theme", r.dataset.theme); } catch (_) {}
+};
+try { const t = localStorage.getItem("x9-theme"); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+async function filesFromDrop(dt) {
+  const out = [], walk = async entry => {
+    if (entry.isFile) out.push(await new Promise((res, rej) => entry.file(res, rej)));
+    else if (entry.isDirectory) { const r = entry.createReader(); let batch;
+      do { batch = await new Promise((res, rej) => r.readEntries(res, rej)); for (const e of batch) await walk(e); } while (batch.length); }
+  };
+  const entries = [...dt.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entries.length) return [...dt.files];
+  for (const e of entries) await walk(e);
+  return out;
+}
+for (const ev of ["dragenter", "dragover"]) document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); });
+for (const ev of ["dragleave", "drop"]) document.addEventListener(ev, e => { e.preventDefault(); if (ev === "drop" || e.target === document.documentElement) $("drop").classList.remove("over"); });
+document.addEventListener("drop", async e => { loadFiles(await filesFromDrop(e.dataTransfer)); });
+
+// expected-file list on the landing page
+$("drop").insertBefore(h("div", { class: "expected", style: "max-width:760px;margin:12px auto 0;text-align:left" },
+  ["clamav_report.json", "trivy_report.json", "gitleaks_report.json", "syft_report.json", "grype_report.json", "semgrep_report.json"]
+    .map(n => h("div", null, h("span", { class: "st miss" }, "•"), h("code", null, n)))), $("drop").querySelector(".actions"));
+setView("load");
+</script>
+</body>
+</html>
