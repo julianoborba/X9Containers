@@ -1,5 +1,4 @@
-# NOTE: scans the *flattened* rootfs only. For files hidden by later layers and
-# secrets in ENV/history use layers.clamav.trivy.gitleaks.X9.Dockerfile.
+# NOTE: scans the *flattened* rootfs only.
 #
 # sudo docker buildx build -t suspectimage \
 #   --build-arg REGISTRY=docker.io \
