@@ -1,4 +1,7 @@
-# sudo docker buildx build --network=host -t suspectimage \
+# NOTE: scans the *flattened* rootfs only. For files hidden by later layers and
+# secrets in ENV/history use layers.clamav.trivy.gitleaks.X9.Dockerfile.
+#
+# sudo docker buildx build -t suspectimage \
 #   --build-arg REGISTRY=docker.io \
 #   --build-arg CLAMAV_IMAGE=clamav/clamav:stable \
 #   --build-arg TRIVY_IMAGE=aquasec/trivy:latest \
@@ -14,12 +17,16 @@
 #   --build-arg GITLEAKES_WORKDIR=. \
 #   --build-arg SYFT_WORKDIR=. \
 #   --build-arg SEMGREP_WORKDIR=. \
+#   --build-arg CACHEBUST="$(date +%s)" \
+#   --output type=local,dest=./reports \
 #   .
-# 
+#
+# --output exports the scratch final stage straight to ./reports
+# OR
 # sudo docker create --name suspectcontainer -it suspectimage /bin/sh
 # sudo docker cp suspectcontainer:/reports ./reports
 # sudo docker rm suspectcontainer
-# 
+# THEN
 # sudo docker system prune --all --volumes --force
 
 ARG REGISTRY=docker.io
@@ -43,71 +50,74 @@ FROM ${REGISTRY}/${BASE_IMAGE} AS base
 FROM ${REGISTRY}/${TARGET_IMAGE} AS target
 
 FROM base AS base-stage
+SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 WORKDIR /scanroot
 COPY --from=target / /scanroot
 
 FROM base-stage AS trivy-stage
 ARG TRIVY_WORKDIR=.
 ARG TRIVY_SEVERITY=CRITICAL,HIGH
+ARG CACHEBUST
 WORKDIR /reports
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
-COPY .trivyignore.yaml /reports/.trivyignore.yaml
-RUN trivy filesystem \
-      --scanners vuln,secret,misconfig \
-      --severity $TRIVY_SEVERITY \
-      --exit-code 0 --no-progress \
-      "/scanroot/$TRIVY_WORKDIR" \
-      -f json -o trivy_report.json
+COPY .trivyignore* /reports/
+RUN echo "db refresh ${CACHEBUST:-}"; \
+    IGN=""; [ -f .trivyignore.yaml ] && IGN="--ignorefile .trivyignore.yaml"; \
+    trivy rootfs $IGN \
+    --scanners vuln,secret,misconfig \
+    --pkg-types os,library \
+    --severity "$TRIVY_SEVERITY" \
+    --exit-code 0 --no-progress \
+    -f json -o trivy_report.json \
+    "/scanroot/$TRIVY_WORKDIR"
 
 FROM base-stage AS clamscan-stage
 ARG CLAMAV_WORKDIR=.
 WORKDIR /reports
-RUN sed -i 's/dl-cdn.alpinelinux.org/dl-cdn.alpinelinux.org/g' /etc/apk/repositories && \
-    echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/community" >> /etc/apk/repositories && \
-    apk update && \
-    apk upgrade && \
-    apk add --no-cache clamav-libunrar clamav
-COPY --from=clamav /var/lib/clamav/main.cvd /var/lib/clamav/
-COPY --from=clamav /var/lib/clamav/daily.cvd /var/lib/clamav/
-COPY --from=clamav /var/lib/clamav/bytecode.cvd /var/lib/clamav/
-COPY clamav_report_to_json.sh /reports/clamav_report_to_json.sh
-RUN freshclam
-RUN clamscan \
-      -r -i \
-      "/scanroot/$CLAMAV_WORKDIR" \
-      | ./clamav_report_to_json.sh | tee clamav_report.json
+ARG CACHEBUST
+RUN apk add --no-cache clamav-libunrar clamav
+COPY --from=clamav --chown=clamav /var/lib/clamav/ /var/lib/clamav/
+COPY --chmod=0755 clamav_report_to_json.sh /usr/local/bin/clamav_report_to_json.sh
+RUN echo "db refresh ${CACHEBUST:-}"; \
+    freshclam --stdout || echo "WARNING: freshclam failed, using the DB shipped in the clamav image" >&2
+RUN rc=0; \
+    clamscan -r -i \
+    --max-filesize=2000M --max-scansize=4000M \
+    --alert-exceeds-max=yes --alert-encrypted=yes \
+    --follow-dir-symlinks=0 --follow-file-symlinks=0 \
+    "/scanroot/$CLAMAV_WORKDIR" > clamav_report.txt || rc=$?; \
+    [ "$rc" -le 1 ] || exit "$rc"; \
+    clamav_report_to_json.sh clamav_report.txt | tee clamav_report.json
 
 FROM base-stage AS gitleaks-stage
 ARG GITLEAKES_WORKDIR=.
 WORKDIR /reports
 COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
-RUN gitleaks detect \
-      --source="/scanroot/$GITLEAKES_WORKDIR" \
-      --no-git \
-      --report-format=json \
-      --exit-code=0 \
-      --report-path=gitleaks_report.json
+RUN gitleaks dir "/scanroot/$GITLEAKES_WORKDIR" \
+    --no-banner --redact \
+    --report-format=json \
+    --exit-code=0 \
+    --report-path=gitleaks_report.json
 
 FROM base-stage AS syft-stage
 ARG SYFT_WORKDIR=.
 WORKDIR /reports
 COPY --from=syft /syft /usr/local/bin/syft
-RUN syft "/scanroot/$SYFT_WORKDIR" -o cyclonedx-json | tee "syft_report.json"
+RUN syft scan "dir:/scanroot/$SYFT_WORKDIR" -o cyclonedx-json=syft_report.json
 
 FROM base-stage AS grype-stage
 WORKDIR /reports
 COPY --from=grype /grype /usr/local/bin/grype
 COPY --from=syft-stage /reports/syft_report.json .
-RUN grype sbom:"/reports/syft_report.json" -o json | tee "grype_report.json"
+ARG CACHEBUST
+RUN echo "db refresh ${CACHEBUST:-}"; grype sbom:/reports/syft_report.json -o json --file grype_report.json
 
-FROM base-stage AS semgrep-stage
+FROM semgrep AS semgrep-stage
 ARG SEMGREP_WORKDIR=.
+COPY --from=target / /scanroot
 WORKDIR /reports
-RUN apk add --no-cache python3 py3-pip
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir semgrep
-RUN semgrep scan --config auto --json --output "semgrep_report.json" "/scanroot/$SEMGREP_WORKDIR"
+RUN semgrep scan --config p/default --metrics=off \
+    --json --output semgrep_report.json "/scanroot/$SEMGREP_WORKDIR"
 
 FROM scratch AS final-stage
 WORKDIR /reports
